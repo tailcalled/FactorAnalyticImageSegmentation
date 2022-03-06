@@ -14,7 +14,7 @@ SZ = 128
 
 ## transformations
 transform = transforms.Compose(
-    [transforms.RandomCrop((SZ, SZ)), transforms.ToTensor()])
+    [transforms.RandomCrop((SZ, SZ), pad_if_needed=True, padding_mode='symmetric'), transforms.ToTensor()])
 
 ## download and load training dataset
 trainset = torchvision.datasets.CocoDetection(root='./data/train2014/', annFile="./data/annotations/instances_train2014.json", transform=transform)
