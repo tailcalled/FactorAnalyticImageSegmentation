@@ -4,17 +4,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
+import torch.multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 print(torch.__version__)
 
-BATCH_SIZE = 64
+BATCH_SIZE = 1
+SZ = 128
 
 ## transformations
 transform = transforms.Compose(
-    [transforms.ToTensor()])
+    [transforms.RandomCrop((SZ, SZ)), transforms.ToTensor()])
 
 ## download and load training dataset
-trainset = torchvision.datasets.CocoDetection(root='./data', annFile="./data/annotations/instances_train2014.json", transform=transform)
+trainset = torchvision.datasets.CocoDetection(root='./data/train2014/', annFile="./data/annotations/instances_train2014.json", transform=transform)
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=BATCH_SIZE,
                                           shuffle=True, num_workers=2)
 
@@ -34,7 +37,7 @@ image, labels = dataiter.next()
 print(image.shape)
 print(image[0, 0, 0, 0])
 
-blurred_img = transforms.GaussianBlur(7, 7)(image)
+blurred_img = transforms.GaussianBlur(14, 7)(image)
 res_img = image - blurred_img
 print(torch.cat([res_img, image], axis=1).shape)
 
