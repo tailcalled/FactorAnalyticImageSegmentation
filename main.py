@@ -14,7 +14,7 @@ transform = transforms.Compose(
     [transforms.ToTensor()])
 
 ## download and load training dataset
-trainset = torchvision.datasets.CocoDetection(root='./data', transform=transform)
+trainset = torchvision.datasets.CocoDetection(root='./data', annFile="./data/annotations/instances_train2014.json", transform=transform)
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=BATCH_SIZE,
                                           shuffle=True, num_workers=2)
 
