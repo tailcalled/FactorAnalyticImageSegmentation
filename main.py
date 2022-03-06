@@ -208,7 +208,7 @@ for epoch in range(num_epochs):
         train_loss_history.append(loss.detach().item())
 
         if i % LARGE_N == 0:
-        	plt.plot(np.arange(len(train_loss_history)) * LARGE_N, train_loss_history)
+        	plt.plot(np.arange(len(train_loss_history)), train_loss_history)
         	plt.xlabel("# of batches")
         	plt.ylabel("loss")
         	plt.savefig(f"output/progress.png")
