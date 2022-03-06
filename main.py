@@ -9,7 +9,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 print(torch.__version__)
 
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 SZ = 128
 
 ## transformations
@@ -212,6 +212,7 @@ for epoch in range(num_epochs):
         	plt.xlabel("# of batches")
         	plt.ylabel("loss")
         	plt.savefig(f"output/progress.png")
+        	plt.close()
 
     print(i)
     
