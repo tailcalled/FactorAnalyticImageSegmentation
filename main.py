@@ -9,8 +9,8 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 print(torch.__version__)
 
-BATCH_SIZE = 8
-SZ = 128
+BATCH_SIZE = 4
+SZ = 100
 
 ## transformations
 transform = transforms.Compose(
@@ -30,9 +30,10 @@ def imshow(img):
     npimg = img.numpy()
     plt.imshow(np.transpose(npimg, (1, 2, 0)))
     plt.show()
+
 def showable(img):
-	print(img.numpy().shape)
-	return np.transpose(img.numpy(), (1, 2, 0))
+	print(img.cpu().numpy().shape)
+	return np.transpose(img.cpu().numpy(), (1, 2, 0))
 
 ## get some random training images
 dataiter = iter(trainloader)
@@ -85,13 +86,16 @@ class MeanColorModelV2(nn.Module):
         super(MeanColorModelV2, self).__init__()
 
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, padding='same')
-        self.blocks = []
+        self.blocks = nn.ModuleList()
+
         for i in range(5):
           self.blocks.append(Block(64, 48))
         self.blocks.append(nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding='same'))
+
         for i in range(6):
           self.blocks.append(Block(128, 96))
         self.blocks.append(nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, padding='same'))
+
         for i in range(3):
           self.blocks.append(Block(256, 192))
         self.convcolor = nn.Conv2d(in_channels=256, out_channels=3, kernel_size=1)
@@ -117,6 +121,7 @@ num_epochs = 5
 
 if not torch.cuda.is_available():
   print('WARNING! Training on CPU')
+
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 model = MeanColorModelV2()
 #model.load_state_dict(torch.load('my_model.dat'))
@@ -129,6 +134,7 @@ SMALL_N = 10
 LARGE_N = 100
 
 train_loss_history = []
+
 for epoch in range(num_epochs):
     train_running_loss = 0.0
     train_acc = 0.0
@@ -145,6 +151,7 @@ for epoch in range(num_epochs):
           image = image.to(device)
           if image.shape[1] == 1:
             image = torch.cat([image, image, image], axis=1)
+
           res_img = whiten(image)
           #out, factor, err = model(res_img)
           out = model(res_img)
@@ -208,13 +215,13 @@ for epoch in range(num_epochs):
         train_loss_history.append(loss.detach().item())
 
         if i % LARGE_N == 0:
-        	plt.plot(np.arange(len(train_loss_history)), train_loss_history)
-        	plt.xlabel("# of batches")
-        	plt.ylabel("loss")
-        	plt.savefig(f"output/progress.png")
-        	plt.close()
-
+          plt.plot(np.arange(len(train_loss_history)), train_loss_history)
+          plt.xlabel("# of batches")
+          plt.ylabel("loss")
+          plt.savefig(f"output/progress.png")
+          plt.close()
+      
     print(i)
-    
+
     print('Epoch: %d | Loss: %.4f | Train Accuracy: %.2f' \
           %(epoch, train_running_loss / i, train_acc/i))        
