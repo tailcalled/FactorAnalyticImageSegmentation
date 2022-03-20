@@ -32,8 +32,8 @@ def imshow(img):
     plt.show()
 
 def showable(img):
-	print(img.cpu().numpy().shape)
-	return np.transpose(img.cpu().numpy(), (1, 2, 0))
+    print(img.cpu().numpy().shape)
+    return np.transpose(img.cpu().numpy(), (1, 2, 0))
 
 ## get some random training images
 dataiter = iter(trainloader)
@@ -114,7 +114,7 @@ class MeanColorModelV2(nn.Module):
 
 blur = transforms.GaussianBlur(7, 7)
 def whiten(image):
-	return (image - blur(image) + 1)/2
+    return (image - blur(image) + 1)/2
 
 learning_rate = 0.001
 num_epochs = 5
@@ -132,6 +132,8 @@ optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
 SMALL_N = 10
 LARGE_N = 100
+STORAGE = 25
+save_debug_images = "always"
 
 train_loss_history = []
 
@@ -181,32 +183,44 @@ for epoch in range(num_epochs):
         if image.shape[1] == 1:
           image = torch.cat([image, image, image], axis=1)
 
-        res_img = (image - transforms.GaussianBlur(7, 7)(image) + 1)/2
+        res_img = whiten(image)
 
         ## forward + backprop + loss
         #preds, factor, err = model(res_img)
         preds = model(res_img)
         loss = criterion(preds, image)
+        if save_debug_images == "always" or save_debug_images > 0:
+            out = preds
+            diff = image - out
+            plt.imshow(showable(torchvision.utils.make_grid(torch.cat([torch.stack([(diff/2 + 0.5)[i], image[i], res_img[i], out[i]]).detach() for i in range(BATCH_SIZE)]))))
+            plt.title(f"{i} {np.round(loss.detach().item(), 2)}")
+            plt.savefig(f"output/debug_imgbatches/debug{i % STORAGE}.png")
+            plt.close()
+            if save_debug_images == "always":
+                if loss.detach().item() > 3:
+                    save_debug_images = STORAGE // 2
+            else:
+                save_debug_images -= 1
         optimizer.zero_grad()
         loss.backward()
         if False:
-	        delta = image - preds
-	        loadings = torch.reshape(factor, (image.shape[0], 3, model.VEC, image.shape[2], image.shape[3]))
-	        loadings = torch.permute(loadings, [0, 2, 1, 3, 4])
-	        loadings = torch.reshape(loadings, (image.shape[0], model.VEC, 3 * image.shape[2] * image.shape[3]))
-	        err = torch.reshape(err, (image.shape[0], 3 * image.shape[2] * image.shape[3]))
-	        delta = torch.reshape(delta, (image.shape[0], 3 * image.shape[2] * image.shape[3]))
-	        K = 20
-	        poss = torch.randint(0, 3 * image.shape[2] * image.shape[3], (image.shape[0], K)).to(device)
-	        sub_loadings = torch.gather(loadings, 2, poss.reshape(image.shape[0], 1, K).expand(image.shape[0], model.VEC, K))
-	        sub_err = torch.gather(err, 1, poss)
-	        sub_delta = torch.gather(delta, 1, poss)
-	        covs = sub_loadings.transpose(1, 2) @ sub_loadings + torch.diag_embed(sub_err)
-	        covs_inv = torch.inverse(covs)
-	        logprob = -0.5 * torch.logdet(2 * 3.1415 * covs_inv) - 0.5 * sub_delta @ covs_inv @ sub_delta.T
-	        loss -= torch.sum(logprob/K)
-	        optimizer.zero_grad()
-        	loss.backward()
+            delta = image - preds
+            loadings = torch.reshape(factor, (image.shape[0], 3, model.VEC, image.shape[2], image.shape[3]))
+            loadings = torch.permute(loadings, [0, 2, 1, 3, 4])
+            loadings = torch.reshape(loadings, (image.shape[0], model.VEC, 3 * image.shape[2] * image.shape[3]))
+            err = torch.reshape(err, (image.shape[0], 3 * image.shape[2] * image.shape[3]))
+            delta = torch.reshape(delta, (image.shape[0], 3 * image.shape[2] * image.shape[3]))
+            K = 20
+            poss = torch.randint(0, 3 * image.shape[2] * image.shape[3], (image.shape[0], K)).to(device)
+            sub_loadings = torch.gather(loadings, 2, poss.reshape(image.shape[0], 1, K).expand(image.shape[0], model.VEC, K))
+            sub_err = torch.gather(err, 1, poss)
+            sub_delta = torch.gather(delta, 1, poss)
+            covs = sub_loadings.transpose(1, 2) @ sub_loadings + torch.diag_embed(sub_err)
+            covs_inv = torch.inverse(covs)
+            logprob = -0.5 * torch.logdet(2 * 3.1415 * covs_inv) - 0.5 * sub_delta @ covs_inv @ sub_delta.T
+            loss -= torch.sum(logprob/K)
+            optimizer.zero_grad()
+            loss.backward()
 
         ## update model params
         optimizer.step()
