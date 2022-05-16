@@ -1,241 +1,152 @@
-import torch
-import torch.fft as fft
-import torch.nn as nn
-import torch.nn.functional as F
-import torchvision
-import torchvision.transforms as transforms
-import torch.multiprocessing
-torch.multiprocessing.set_sharing_strategy('file_system')
-
-print(torch.__version__)
-
-BATCH_SIZE = 4
-SZ = 100
-
-## transformations
-transform = transforms.Compose(
-    [transforms.RandomCrop((SZ, SZ), pad_if_needed=True, padding_mode='symmetric'), transforms.ToTensor()])
-
-## download and load training dataset
-trainset = torchvision.datasets.CocoDetection(root='./data/train2014/', annFile="./data/annotations/instances_train2014.json", transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=BATCH_SIZE,
-                                          shuffle=True, num_workers=2, collate_fn=lambda xs: torch.stack([x[0] for x in xs]))
+from __future__ import annotations
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+import torch.multiprocessing
+from tqdm import tqdm
+import wandb
 
-## functions to show an image
-def imshow(img):
-    #img = img / 2 + 0.5     # unnormalize
-    npimg = img.numpy()
-    plt.imshow(np.transpose(npimg, (1, 2, 0)))
-    plt.show()
+torch.multiprocessing.set_sharing_strategy("file_system")
 
-def showable(img):
-    print(img.cpu().numpy().shape)
-    return np.transpose(img.cpu().numpy(), (1, 2, 0))
+print(f"torch version: {torch.__version__}")
 
-## get some random training images
-dataiter = iter(trainloader)
-image = dataiter.next()
-#image, labels = dataiter.next()
-print(image)
-print(image.shape)
-print(image[0, 0, 0, 0])
+from utils.helpers import make_setup
+from utils.vizualise import whiten, save_result, update_debug
+from utils.progress import AverageMeter, ProgressMeter
+from utils.config import command_line_parser
 
-blurred_img = transforms.GaussianBlur(15, 7)(image)
-res_img = image - blurred_img
-print(torch.cat([res_img, image], axis=1).shape)
-
-deblur_img = transforms.GaussianBlur(99, 10)(res_img)
-deblur_img_norm = transforms.GaussianBlur(99, 10)(torch.abs(res_img))
-deblur_img = deblur_img / deblur_img_norm
-
-res_img = (res_img + 1)/2
-
-deblur_img = deblur_img + res_img
-deblur_img = (deblur_img - torch.min(deblur_img)) / (torch.max(deblur_img) - torch.min(deblur_img))
-
-print(res_img[0].shape, blurred_img[0].shape, image[0].shape)
-
-## show images
-#imshow(torchvision.utils.make_grid(torch.cat([deblur_img, res_img, image])))
-imshow(torchvision.utils.make_grid(torch.cat([torch.stack([res_img[i], blurred_img[i], image[i], image[i]]) for i in range(BATCH_SIZE)])))
-
-class Block(nn.Module):
-    def __init__(self, outer_dim, inner_dim, repr_dim=None):
-        super(Block, self).__init__()
-
-        if repr_dim is None:
-            repr_dim = inner_dim
-        self.conv_inner = nn.Conv2d(in_channels=outer_dim, out_channels=inner_dim, kernel_size=1)
-        self.conv_loc = nn.Conv2d(in_channels=inner_dim, out_channels=inner_dim, kernel_size=3, padding='same')
-        self.conv_dil = nn.Conv2d(in_channels=inner_dim, out_channels=inner_dim, kernel_size=3, dilation=3, padding='same')
-        self.conv_delta = nn.Conv2d(in_channels=inner_dim*2, out_channels=outer_dim, kernel_size=1)
-    
-    def forward(self, x):
-        v = F.relu(self.conv_inner(x))
-        a = F.relu(self.conv_loc(v))
-        b = F.relu(self.conv_loc(v))
-        v = torch.cat([a, b], axis=1) # TODO is this the right axis to cat on?
-        x = x + self.conv_delta(v)
-        return x
-
-class MeanColorModelV2(nn.Module):
-    def __init__(self):
-        super(MeanColorModelV2, self).__init__()
-
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, padding='same')
-        self.blocks = nn.ModuleList()
-
-        for i in range(5):
-          self.blocks.append(Block(64, 48))
-        self.blocks.append(nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding='same'))
-
-        for i in range(6):
-          self.blocks.append(Block(128, 96))
-        self.blocks.append(nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, padding='same'))
-
-        for i in range(3):
-          self.blocks.append(Block(256, 192))
-        self.convcolor = nn.Conv2d(in_channels=256, out_channels=3, kernel_size=1)
-        #self.convfactor = nn.Conv2D(in_channels=256, out_channels=256, kernel_size=1)
-        #self.converr = nn.Conv2D(in_channels=256, out_channels=3, kernel_size=1)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        for block in self.blocks:
-          x = block(x)
-        out = self.convcolor(x)
-
-        #factor = self.convfactor(x)
-        #err = self.converr(x)
-        return out#, factor, err*err + 0.01
-
-blur = transforms.GaussianBlur(7, 7)
-def whiten(image):
-    return (image - blur(image) + 1)/2
-
-learning_rate = 0.001
-num_epochs = 5
-
-if not torch.cuda.is_available():
-  print('WARNING! Training on CPU')
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-model = MeanColorModelV2()
-#model.load_state_dict(torch.load('my_model.dat'))
-#model.eval()
-model = model.to(device)
-criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-SMALL_N = 10
-LARGE_N = 100
-STORAGE = 25
-save_debug_images = "always"
+def train_log(loss, examples_seen, epoch):
+    wandb.log({"epoch": epoch, "loss": loss}, step=examples_seen)
+    print(f"Loss after " + str(examples_seen).zfill(5) + f" examples: {loss:.3f}")
 
-train_loss_history = []
 
-for epoch in range(num_epochs):
-    train_running_loss = 0.0
-    train_acc = 0.0
+def train_batch(images, model, optimizer, criterion, i, batch_size, save_freq):
+    images = images.to(device)
 
-    model = model.train()
+    images = images.to(device)
+    if images.shape[1] == 1:
+        images = torch.cat([images, images, images], axis=1)
 
-    ## training step
-    for i, image in enumerate(trainloader):
-        if i % SMALL_N == 0:
-          print(i, train_running_loss / (i+1))
-        if i % LARGE_N == 0:
-          dataiter = iter(trainloader)
-          image = dataiter.next()
-          image = image.to(device)
-          if image.shape[1] == 1:
-            image = torch.cat([image, image, image], axis=1)
+    res_images = whiten(images)
+    output = model(res_images)
+    output = output.to(device)
+    if i % save_freq == 0:
+        save_result(
+            images,
+            output,
+            res_images,
+            batch_size,
+            output_dir=f"output/img_batches/batch{i}.png",
+        )
 
-          res_img = whiten(image)
-          #out, factor, err = model(res_img)
-          out = model(res_img)
-          diff = image - out
-          #out_norm = (out - torch.min(out)) / (torch.max(out) - torch.min(out))
-          #diff = (diff - torch.min(diff)) / (torch.max(diff) - torch.min(diff))
-          #factor = torch.reshape(factor, (image.shape[0], 3, model.VEC, image.shape[2], image.shape[3]))
-          #loadings = torch.permute(factor, [0, 3, 4, 1, 2])
-          #loadings = torch.reshape(loadings, (image.shape[0], image.shape[2] * image.shape[3], 3 * model.VEC))
-          #U, S, V = torch.pca_lowrank(loadings, 9)
-          #interp = torch.reshape(U, (image.shape[0], 9, image.shape[2], image.shape[3]))
-          #interp = (interp - torch.min(interp)) / (torch.max(interp) - torch.min(interp))
-          #print('012, 345, 678')
-          print((diff + 0.5).shape, image.shape, res_img.shape, out.shape)
-          plt.imshow(showable(torchvision.utils.make_grid(torch.cat([torch.stack([(diff + 0.5)[i], image[i], res_img[i], out[i]]).detach() for i in range(BATCH_SIZE)]))))
-          #plt.imshow(torchvision.utils.make_grid(showable(torch.cat([diff + 0.5, image, res_img, out]).detach()).cpu()))
-          plt.savefig(f"output/imgbatches/batch{i}.png")
-          plt.close()
-          #imshow(torchvision.utils.make_grid(torch.cat([interp[:, 0:3, :, :], interp[:, 3:6, :, :], interp[:, 6:9, :, :]]).cpu()))
-          #print('out\', res, img')
-          #imshow(torchvision.utils.make_grid(torch.cat([out_norm, res_img, image]).cpu()))
-          #print('stder, delta, out')
-          #imshow(torchvision.utils.make_grid(torch.cat([err, diff, out]).cpu()))
-        
-        image = image.to(device)
+    loss = criterion(output, images)
 
-        if image.shape[1] == 1:
-          image = torch.cat([image, image, image], axis=1)
+    # backward
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
 
-        res_img = whiten(image)
+    return loss, output
 
-        ## forward + backprop + loss
-        #preds, factor, err = model(res_img)
-        preds = model(res_img)
-        loss = criterion(preds, image)
-        if save_debug_images == "always" or save_debug_images > 0:
-            out = preds
-            diff = image - out
-            plt.imshow(showable(torchvision.utils.make_grid(torch.cat([torch.stack([(diff/2 + 0.5)[i], image[i], res_img[i], out[i]]).detach() for i in range(BATCH_SIZE)]))))
-            plt.title(f"{i} {np.round(loss.detach().item(), 2)}")
-            plt.savefig(f"output/debug_imgbatches/debug{i % STORAGE}.png")
-            plt.close()
-            if save_debug_images == "always":
-                if loss.detach().item() > 3:
-                    save_debug_images = STORAGE // 2
-            else:
-                save_debug_images -= 1
-        optimizer.zero_grad()
-        loss.backward()
-        if False:
-            delta = image - preds
-            loadings = torch.reshape(factor, (image.shape[0], 3, model.VEC, image.shape[2], image.shape[3]))
-            loadings = torch.permute(loadings, [0, 2, 1, 3, 4])
-            loadings = torch.reshape(loadings, (image.shape[0], model.VEC, 3 * image.shape[2] * image.shape[3]))
-            err = torch.reshape(err, (image.shape[0], 3 * image.shape[2] * image.shape[3]))
-            delta = torch.reshape(delta, (image.shape[0], 3 * image.shape[2] * image.shape[3]))
-            K = 20
-            poss = torch.randint(0, 3 * image.shape[2] * image.shape[3], (image.shape[0], K)).to(device)
-            sub_loadings = torch.gather(loadings, 2, poss.reshape(image.shape[0], 1, K).expand(image.shape[0], model.VEC, K))
-            sub_err = torch.gather(err, 1, poss)
-            sub_delta = torch.gather(delta, 1, poss)
-            covs = sub_loadings.transpose(1, 2) @ sub_loadings + torch.diag_embed(sub_err)
-            covs_inv = torch.inverse(covs)
-            logprob = -0.5 * torch.logdet(2 * 3.1415 * covs_inv) - 0.5 * sub_delta @ covs_inv @ sub_delta.T
-            loss -= torch.sum(logprob/K)
-            optimizer.zero_grad()
-            loss.backward()
 
-        ## update model params
-        optimizer.step()
+def train(train_loader, model, criterion, optimizer, cfg):
+    save_debug_images = "always"
+    wandb.watch(model, criterion, log="all", log_freq=cfg.log_freq)
+    train_loss_history = []
 
-        train_running_loss += loss.detach().item()
-        train_loss_history.append(loss.detach().item())
+    for epoch in tqdm(range(cfg.epochs)):
+        train_running_loss = 0.0
+        batch_time = AverageMeter("Time", ":6.3f")
+        data_time = AverageMeter("Data", ":6.3f")
+        losses = AverageMeter("Loss", ":.4f")
+        model = model.train()
+        progress = ProgressMeter(
+            len(train_loader),
+            [batch_time, data_time, losses],
+            prefix="Epoch: [{}]".format(epoch),
+        )
 
-        if i % LARGE_N == 0:
-          plt.plot(np.arange(len(train_loss_history)), train_loss_history)
-          plt.xlabel("# of batches")
-          plt.ylabel("loss")
-          plt.savefig(f"output/progress.png")
-          plt.close()
-      
-    print(i)
+        examples_seen = 0
+        batch_ct = 0
 
-    print('Epoch: %d | Loss: %.4f | Train Accuracy: %.2f' \
-          %(epoch, train_running_loss / i, train_acc/i))        
+        end = time.time()
+        for i, images in tqdm(enumerate(train_loader)):
+
+            data_time.update(time.time() - end)
+
+            ## training step
+            if i % cfg.print_freq == 0:
+                progress.display(i)
+
+            loss, output = train_batch(
+                images, model, optimizer, criterion, i, cfg.batch_size, cfg.save_freq
+            )
+
+            if loss.detach().item() > (train_running_loss / (i + 1)) * 3:
+                save_debug_images = update_debug(
+                    save_debug_images, images, output, loss, cfg, i
+                )
+
+            # measure and record loss
+            losses.update(loss.item(), images.size(0))
+
+            # log to wandb
+            examples_seen += len(images)
+            batch_ct += 1
+            if ((batch_ct + 1) % 25) == 0:
+                train_log(loss, examples_seen, epoch)
+
+            batch_time.update(time.time() - end)
+
+            train_running_loss += loss.detach().item()
+            train_loss_history.append(loss.detach().item())
+
+            if i % cfg.save_freq == 0:
+                plt.plot(np.arange(len(train_loss_history)), train_loss_history)
+                plt.xlabel("# of batches")
+                plt.ylabel("loss")
+                plt.savefig(f"output/progress.png")
+                plt.close()
+
+            end = time.time()
+
+        print(f"Epoch: {epoch} | Loss: {train_running_loss}")
+
+
+def model_pipeline(cfg):
+    hyperparams = dict(
+        epochs=cfg.epochs,
+        batch_size=cfg.batch_size,
+        learning_rate=cfg.learning_rate,
+        dataset=cfg.dataset,
+        architecture=cfg.model_name,
+    )
+
+    with wandb.init(
+        "Factor Analytic Image Segmentation", entity="team23", config=hyperparams
+    ):
+        model, train_loader, criterion, optimizer = make_setup(cfg)
+        model = model.to(device)
+        if not torch.cuda.is_available():
+            print("WARNING! Training on CPU")
+
+        ## show images
+        # plot_example(train_loader, cfg.batch_size)
+        train(train_loader, model, criterion, optimizer, cfg)
+
+    return model
+
+
+def main():
+    cfg = command_line_parser()
+    model = model_pipeline(cfg)
+
+
+if __name__ == "__main__":
+    main()
+
