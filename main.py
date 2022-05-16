@@ -20,7 +20,6 @@ from utils.config import command_line_parser
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-
 def train_log(loss, examples_seen, epoch):
     wandb.log({"epoch": epoch, "loss": loss}, step=examples_seen)
     print(f"Loss after " + str(examples_seen).zfill(5) + f" examples: {loss:.3f}")
@@ -150,3 +149,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
