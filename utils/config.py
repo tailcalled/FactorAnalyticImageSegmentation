@@ -141,18 +141,29 @@ def command_line_parser():
     parser.add_argument(
         "--dataset",
         type=str,
-        default="COCO",
-        choices=["COCO"],
+        default="imagenet",
+        choices=["imagenet", "coco"],
         help="Dataset name",
+    )
+
+    parser.add_argument(
+        "--encoder_model_name",
+        type=str,
+        default="resnet34",
+        choices=["resnet18", "resnet34"],
+        help="model",
     )
 
     parser.add_argument(
         "--model_name",
         type=str,
-        default="mean_color_modelv2",
-        choices=["mean_color_modelv2"],
+        default="deeplabv3p",
+        choices=["mean_color_modelv2", "deeplabv3p"],
         help="model",
     )
+
+    parser.add_argument("--pretrained", type=str2bool, default=True)
+
     parser.add_argument(
         "--save_debug_imgs",
         type=str2bool,
@@ -177,6 +188,13 @@ def command_line_parser():
 
     parser.add_argument(
         "--loss_fn", type=str, default="mse", help="Which loss function to use"
+    )
+
+    parser.add_argument(
+        "--data_slice",
+        type=int,
+        default=5,
+        help="How big of a subet of the dataset we should use. 5 means we use 1/5 of the dataset",
     )
 
     cfg = parser.parse_args()

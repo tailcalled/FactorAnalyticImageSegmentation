@@ -1,11 +1,14 @@
-from multiprocessing.sharedctypes import Value
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torchvision
 import torchvision.transforms as transforms
+from torchtyping import TensorType
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+import wandb
 
 ## functions to show an image
 def imshow(img):
@@ -29,29 +32,29 @@ def plot_example(trainloader, batch_size):
     print(image[0, 0, 0, 0])
 
     blurred_img = transforms.GaussianBlur(15, 7)(image)
-    res_img = image - blurred_img
-    print(torch.cat([res_img, image], axis=1).shape)
+    whitened_img = image - blurred_img
+    print(torch.cat([whitened_img, image], axis=1).shape)
 
-    deblur_img = transforms.GaussianBlur(99, 10)(res_img)
-    deblur_img_norm = transforms.GaussianBlur(99, 10)(torch.abs(res_img))
+    deblur_img = transforms.GaussianBlur(99, 10)(whitened_img)
+    deblur_img_norm = transforms.GaussianBlur(99, 10)(torch.abs(whitened_img))
     deblur_img = deblur_img / deblur_img_norm
 
-    res_img = (res_img + 1) / 2
+    whitened_img = (whitened_img + 1) / 2
 
-    deblur_img = deblur_img + res_img
+    deblur_img = deblur_img + whitened_img
     deblur_img = (deblur_img - torch.min(deblur_img)) / (
         torch.max(deblur_img) - torch.min(deblur_img)
     )
 
-    print(res_img[0].shape, blurred_img[0].shape, image[0].shape)
+    print(whitened_img[0].shape, blurred_img[0].shape, image[0].shape)
 
     ## show images
-    # imshow(torchvision.utils.make_grid(torch.cat([deblur_img, res_img, image])))
+    # imshow(torchvision.utils.make_grid(torch.cat([deblur_img, whitened_img, image])))
     imshow(
         torchvision.utils.make_grid(
             torch.cat(
                 [
-                    torch.stack([res_img[i], blurred_img[i], image[i], image[i]])
+                    torch.stack([whitened_img[i], blurred_img[i], image[i], image[i]])
                     for i in range(batch_size)
                 ]
             )
@@ -59,78 +62,91 @@ def plot_example(trainloader, batch_size):
     )
 
 
-def whiten(image):
+def whiten(
+    images: TensorType["batch_size", "channels", "H", "W"]
+) -> TensorType["batch_size", "channels", "H", "W"]:
     blur = transforms.GaussianBlur(7, 7)
-    return (image - blur(image) + 1) / 2
+    return images - blur(images)
 
 
-def get_image_grid(image, output, res_img, cfg):
+def color_transform(
+    images: TensorType["batch_size", "channels", "H", "W"]
+) -> TensorType["batch_size", "channels", "H", "W"]:
+    r, g, b = torch.split(images, [1, 1, 1], dim=1)
+    x = r + g + b
+    y = r**2 + g**2 + b**2
+    z = r * g + r * b + g * b
+    imgs_color_transformed = torch.concat([x, y, z], dim=1)
+    return (imgs_color_transformed + 3) / 6
+
+
+def get_image_grid(image, output, whitened_img, cfg):
     out = output
     diff = image - out
     diff = diff + 0.5 if cfg.save_debug_imgs else diff / 2 + 0.5
     return torchvision.utils.make_grid(
         torch.cat(
             [
-                torch.stack([diff[i], image[i], res_img[i], out[i]]).detach()
+                torch.stack([diff[i], image[i], whitened_img[i], out[i]]).detach()
                 for i in range(cfg.batch_size)
             ]
         )
     )
 
-def save_preds(image, output, res_img, loss, i, cfg):
 
-    img_grid = get_image_grid(
-        output.type(torch.uint8),
-        image.type(torch.uint8),
-        res_img.type(torch.uint8),
-        cfg,
-    )
-    output_dir = f"output/debug_imgbatches/debug{i % cfg.storage}.png"
-    plt.imshow(showable(img_grid.type(torch.uint8)))
-    plt.title(f"{i} {np.round(loss.detach().item(), 2)}")
-    plt.savefig(output_dir)
-    plt.close()
+def save_result(
+    img,
+    output,
+    whitened_and_color_transformed,
+    batch_size,
+    output_dir=None,
+    img_name=None,
+):
 
-
-def show_progress(image, pred, i, cfg):
-    res_img = whiten(image)
-    diff = image - pred
-
-    print((diff + 0.5).shape, image.shape, res_img.shape, pred.shape)
-    img_grid = get_image_grid(image, pred, res_img, cfg)
-    plt.savefig(f"output/imgbatches/batch{i}.png")
-    plt.imshow(showable(img_grid))
-    plt.close()
-
-
-def save_result(img, output, res_img, batch_size, output_dir=None):
     if not output_dir:
         raise ValueError("output directory has not been set!")
 
+    Path(output_dir).mkdir(parents=True, exist_ok=True) 
     img = img.to(device)
     output = output.to(device)
     diff = img - output
-    res_img = res_img.to(device)
+    whitened_and_color_transformed = whitened_and_color_transformed.to(device)
     diff = diff.to(device)
-    print((img + 0.5).shape, img.shape, res_img.shape, output.shape)
-    plt.imshow(
-        showable(
-            torchvision.utils.make_grid(
-                torch.cat(
-                    [
-                        torch.stack(
-                            [(diff + 0.5)[i], img[i], res_img[i], output[i]]
-                        ).detach()
-                        for i in range(batch_size)
-                    ]
-                )
+    print(
+        (img + 0.5).shape, img.shape, whitened_and_color_transformed.shape, output.shape
+    )
+    images = showable(
+        torchvision.utils.make_grid(
+            torch.cat(
+                [
+                    torch.stack(
+                        [
+                            (diff + 0.5)[i],
+                            img[i],
+                            # whitened_img[i],
+                            whitened_and_color_transformed[i],
+                            output[i],
+                        ]
+                    ).detach()
+                    for i in range(batch_size)
+                ]
             )
         )
     )
-    # plt.imshow(torchvision.utils.make_grid(showable(torch.cat([diff + 0.5, image, res_img, out]).detach()).cpu()))
+    print(f"images: {images.shape}")
+    images = plt.imshow(images)
+    wandb.log(
+        {
+            "img": [
+                wandb.Image(images, caption="blurred | orig | net_input | prediction")
+            ]
+        }
+    )
+    # plt.imshow(torchvision.utils.make_grid(showable(torch.cat([diff + 0.5, image, whitened_img, out]).detach()).cpu()))
 
-    plt.savefig(output_dir)
+    plt.savefig(Path(output_dir) / img_name)
     plt.close()
+
 
 def update_debug(save_debug_images, images, output, loss, cfg, i):
     print("WARNING! Loss increased a lot")
@@ -139,7 +155,8 @@ def update_debug(save_debug_images, images, output, loss, cfg, i):
         output,
         whiten(images),
         cfg.batch_size,
-        output_dir=f"output/debug_img_batches/debug{i % cfg.storage}.png",
+        output_dir="output/debug_img_batches",
+        img_name=f"debug{i % cfg.storage}.png",
     )
 
     if save_debug_images == "always":
