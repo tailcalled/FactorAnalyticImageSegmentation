@@ -70,6 +70,10 @@ def command_line_parser():
     )
 
     parser.add_argument(
+        "--model_latent_dim", type=int, default=256, help="Latent vector dimension count"
+    )
+
+    parser.add_argument(
         "--aug_input_crop_size", type=int, default=100, help="Training crop size"
     )
     parser.add_argument(

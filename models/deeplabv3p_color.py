@@ -3,7 +3,6 @@ import torchvision.models.resnet as resnet
 import torch
 import torch.nn.functional as F
 
-
 def get_encoder_channel_counts(encoder_name):
     basic_block_models = ["resnet18", "resnet34"]
     is_basic_block = encoder_name in basic_block_models
@@ -33,7 +32,7 @@ class DeepLabV3pColor(torch.nn.Module):
 
         self.layer2 = ASPPpart(in_channels=256, out_channels=256, kernel_size=3)
 
-        self.decoder = Decoder(256, encoder_out_ch_4x, 3)
+        self.decoder = Decoder(256, encoder_out_ch_4x, 3 + 3 * cfg.model_latent_dim + 1)
 
     def forward(self, x):
         input_size = (x.shape[2], x.shape[3])
@@ -48,7 +47,11 @@ class DeepLabV3pColor(torch.nn.Module):
         preds_1x = F.interpolate(
             preds_4x, size=input_size, mode="bilinear", align_corners=True
         )
-        return preds_1x
+        color_preds = preds_1x[:, :3, :, :]
+        factor_preds = preds_1x[:, 3:-1, :, :]
+        error_preds = torch.exp(preds_1x[:, -1:, :, :])
+        
+        return color_preds, factor_preds, error_preds
 
 
 class Decoder(torch.nn.Module):

@@ -9,8 +9,11 @@ import numpy as np
 from prettytable import PrettyTable
 import torch
 import torch.multiprocessing
+import torchvision.transforms as transforms
 from tqdm import tqdm
 import wandb
+
+from einops import rearrange, reduce, repeat
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -43,35 +46,51 @@ def train_log(loss, examples_seen, epoch):
     print(f"Loss after " + str(examples_seen).zfill(5) + f" examples: {loss:.3f}")
 
 
+sample_subimage = transforms.RandomResizedCrop(224)
+
 def train_batch(images, model, optimizer, criterion, batch_size, save_info):
     images = images.to(device)
+    images_a = sample_subimage(images)
+    images_b = sample_subimage(images)
+    # if images.shape[1] == 1:
+    #     images = torch.cat([images, images, images], axis=1)
 
-    images = images.to(device)
-    if images.shape[1] == 1:
-        images = torch.cat([images, images, images], axis=1)
-
-    whitened = whiten(images)
-    whitened_and_color_transformed = color_transform(whitened)
-    output = model(whitened_and_color_transformed)
-    output = output.to(device)
+    whitened_a = whiten(images_a)
+    whitened_and_color_transformed_a = color_transform(whitened_a)
+    whitened_b = whiten(images_b)
+    whitened_and_color_transformed_b = color_transform(whitened_b)
+    transformed_ab = torch.cat([whitened_and_color_transformed_a, whitened_and_color_transformed_b], axis=0)
+    original_ab = torch.cat([images_a, images_b], axis=0)
+    output_color, output_loadings, output_error = model(transformed_ab)
     if save_info.i % save_info.save_freq == 0:
         save_result(
-            images,
-            output,
-            whitened_and_color_transformed,
+            images_a,
+            output_color[:images_a.shape[0]],
+            whitened_and_color_transformed_a,
             batch_size,
             output_dir=f"output/{save_info.dataset}/img_batches/",
             img_name=f"epoch{save_info.epoch}_batch{save_info.i}.png",
         )
+    output_color = rearrange(output_color, '(layer batch) color height width -> batch height width (layer color)', layer=2)
+    output_loadings = rearrange(output_loadings, '(layer batch) (color loadings) height width -> batch height width (layer color) loadings', layer=2, color=3)
+    output_error = torch.broadcast_to(output_error, (2*images_a.shape[0], 3, images_a.shape[2], images_a.shape[3]))
+    output_error = rearrange(output_error, '(layer batch) color height width -> batch height width (layer color)', layer=2, color=3)
+    original_ab = rearrange(original_ab, '(layer batch) color height width -> batch height width (layer color)', layer=2)
+    output_correlations = output_loadings @ output_loadings.transpose(3, 4)
+    output_correlations = output_correlations + torch.diag_embed(output_error)
+    output_precision = torch.inverse(output_correlations)
+    logdet = torch.logdet(2 * 3.14 * output_precision)
+    difference = output_color - original_ab
 
-    loss = criterion(output, images)
+    per_pixel_loss = - 0.5 * torch.einsum('bhwc,bhwck,bhwk->bhw', difference, output_precision, difference) - logdet/2
+    loss = torch.mean(per_pixel_loss)
 
     # backward
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
-    return loss, output
+    return loss, None
 
 
 def train(train_loader, model, criterion, optimizer, cfg):
