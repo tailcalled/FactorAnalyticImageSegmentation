@@ -48,41 +48,71 @@ def train_log(loss, examples_seen, epoch):
 
 sample_subimage = transforms.RandomResizedCrop(224)
 
+
 def train_batch(images, model, optimizer, criterion, batch_size, save_info):
     images = images.to(device)
     images_a = sample_subimage(images)
     images_b = sample_subimage(images)
-    # if images.shape[1] == 1:
-    #     images = torch.cat([images, images, images], axis=1)
 
     whitened_a = whiten(images_a)
     whitened_and_color_transformed_a = color_transform(whitened_a)
     whitened_b = whiten(images_b)
     whitened_and_color_transformed_b = color_transform(whitened_b)
-    transformed_ab = torch.cat([whitened_and_color_transformed_a, whitened_and_color_transformed_b], axis=0)
+    transformed_ab = torch.cat(
+        [whitened_and_color_transformed_a, whitened_and_color_transformed_b], axis=0
+    )
     original_ab = torch.cat([images_a, images_b], axis=0)
     output_color, output_loadings, output_error = model(transformed_ab)
+    resize = transforms.Resize(56)
+    images_a = resize(images_a)
     if save_info.i % save_info.save_freq == 0:
         save_result(
             images_a,
-            output_color[:images_a.shape[0]],
-            whitened_and_color_transformed_a,
+            output_color[: images_a.shape[0]],
+            resize(whitened_and_color_transformed_a),
             batch_size,
             output_dir=f"output/{save_info.dataset}/img_batches/",
             img_name=f"epoch{save_info.epoch}_batch{save_info.i}.png",
         )
-    output_color = rearrange(output_color, '(layer batch) color height width -> batch height width (layer color)', layer=2)
-    output_loadings = rearrange(output_loadings, '(layer batch) (color loadings) height width -> batch height width (layer color) loadings', layer=2, color=3)
-    output_error = torch.broadcast_to(output_error, (2*images_a.shape[0], 3, images_a.shape[2], images_a.shape[3]))
-    output_error = rearrange(output_error, '(layer batch) color height width -> batch height width (layer color)', layer=2, color=3)
-    original_ab = rearrange(original_ab, '(layer batch) color height width -> batch height width (layer color)', layer=2)
+    output_color = rearrange(
+        output_color,
+        "(layer batch) color height width -> batch height width (layer color)",
+        layer=2,
+    )
+    output_loadings = rearrange(
+        output_loadings,
+        "(layer batch) (color loadings) height width -> batch height width (layer color) loadings",
+        layer=2,
+        color=3,
+    )
+    output_error = torch.broadcast_to(
+        output_error, (2 * images_a.shape[0], 3, images_a.shape[2], images_a.shape[3])
+    )
+    output_error = rearrange(
+        output_error,
+        "(layer batch) color height width -> batch height width (layer color)",
+        layer=2,
+        color=3,
+    )
+    original_ab = rearrange(
+        original_ab,
+        "(layer batch) color height width -> batch height width (layer color)",
+        layer=2,
+    )
+
+    original_ab = resize(rearrange(original_ab, "b h w c -> b c h w"))
+    original_ab = rearrange(original_ab, "b c h w -> b h w c")
     output_correlations = output_loadings @ output_loadings.transpose(3, 4)
     output_correlations = output_correlations + torch.diag_embed(output_error)
     output_precision = torch.inverse(output_correlations)
     logdet = torch.logdet(2 * 3.14 * output_precision)
     difference = output_color - original_ab
 
-    per_pixel_loss = - 0.5 * torch.einsum('bhwc,bhwck,bhwk->bhw', difference, output_precision, difference) - logdet/2
+    per_pixel_loss = (
+        0.5
+        * torch.einsum("bhwc,bhwck,bhwk->bhw", difference, output_precision, difference)
+        - logdet / 2
+    )
     loss = torch.mean(per_pixel_loss)
 
     # backward
@@ -90,7 +120,7 @@ def train_batch(images, model, optimizer, criterion, batch_size, save_info):
     loss.backward()
     optimizer.step()
 
-    return loss, None
+    return loss
 
 
 def train(train_loader, model, criterion, optimizer, cfg):
@@ -120,7 +150,7 @@ def train(train_loader, model, criterion, optimizer, cfg):
                 progress.display(i)
 
             save_info = SaveInfo(cfg.dataset, epoch, i, cfg.save_freq)
-            loss, output = train_batch(
+            loss = train_batch(
                 images, model, optimizer, criterion, batch_size, save_info
             )
 
