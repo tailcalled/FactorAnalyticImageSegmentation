@@ -7,6 +7,8 @@ import torchvision
 import torchvision.transforms as transforms
 from torchtyping import TensorType
 
+from einops import rearrange, reduce, repeat
+
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 import wandb
 
@@ -98,6 +100,7 @@ def save_result(
     img,
     output,
     whitened_and_color_transformed,
+    pca_result,
     batch_size,
     output_dir=None,
     img_name=None,
@@ -112,9 +115,18 @@ def save_result(
     diff = img - output
     whitened_and_color_transformed = whitened_and_color_transformed.to(device)
     diff = diff.to(device)
+    pca_result = pca_result.to(device)
     print(
         (img + 0.5).shape, img.shape, whitened_and_color_transformed.shape, output.shape
     )
+    print(pca_result.shape)
+    lower = reduce(pca_result, "batch colors width height -> colors", "min")
+    upper = reduce(pca_result, "batch colors width height -> colors", "max")
+    lower = repeat(lower, "colors -> batch colors width height", batch=pca_result.shape[0], width=pca_result.shape[2], height=pca_result.shape[3])
+    upper = repeat(upper, "colors -> batch colors width height", batch=pca_result.shape[0], width=pca_result.shape[2], height=pca_result.shape[3])
+    pca_result = (pca_result - lower)/(upper-lower)
+    print(pca_result.shape)
+
     images = showable(
         torchvision.utils.make_grid(
             torch.cat(
@@ -126,11 +138,13 @@ def save_result(
                             # whitened_img[i],
                             whitened_and_color_transformed[i],
                             output[i],
+                            pca_result[i],
                         ]
                     ).detach()
                     for i in range(batch_size)
                 ]
-            )
+            ),
+            nrow=10
         )
     )
     print(f"images: {images.shape}")
