@@ -128,10 +128,6 @@ def save_result(
     pca_result = (pca_result - lower)/(upper-lower)
     print(pca_result.shape)
 
-    lower = torch.min(connected_images)
-    upper = torch.max(connected_images)
-    connected_images = (connected_images - lower)/(upper-lower)
-
     images = showable(
         torchvision.utils.make_grid(
             torch.cat(

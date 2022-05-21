@@ -74,8 +74,14 @@ def train_batch(images, model, optimizer, criterion, batch_size, save_info):
             # a bit hacky way to check the correlations but meh
             connected_image = reduced_loadings_image[(reduced_loadings.shape[2] + 1) * reduced_loadings.shape[3] // 2]
             connected_image = torch.sum(connected_image * reduced_loadings_image, axis=1)
-            connected_image = repeat(connected_image, "(height width) -> colors height width", colors=3, height=reduced_loadings.shape[2])
-            connected_images.append(connected_image)
+            lower = torch.min(connected_image)
+            upper = torch.max(connected_image)
+            span = torch.maximum(upper, -lower)
+            connected_image = rearrange(connected_image, "(height width) -> height width", height=reduced_loadings.shape[2])
+            connected_image_r = -torch.clamp(connected_image, max=0) / span
+            connected_image_g = torch.clamp(connected_image, min=0) / span
+            connected_image_b = 0 * connected_image
+            connected_images.append(torch.stack([connected_image_r, connected_image_g, connected_image_b]))
             U, S, V = torch.pca_lowrank(reduced_loadings_image, 3)
             reduced_loadings_image = rearrange(U, "(height width) colors -> colors height width", height=output_loadings.shape[2], width=output_loadings.shape[3])
             reduced_images.append(reduced_loadings_image)
