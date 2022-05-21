@@ -101,6 +101,7 @@ def save_result(
     output,
     whitened_and_color_transformed,
     pca_result,
+    connected_images,
     batch_size,
     output_dir=None,
     img_name=None,
@@ -127,6 +128,10 @@ def save_result(
     pca_result = (pca_result - lower)/(upper-lower)
     print(pca_result.shape)
 
+    lower = torch.min(connected_images)
+    upper = torch.max(connected_images)
+    connected_images = (connected_images - lower)/(upper-lower)
+
     images = showable(
         torchvision.utils.make_grid(
             torch.cat(
@@ -139,12 +144,13 @@ def save_result(
                             whitened_and_color_transformed[i],
                             output[i],
                             pca_result[i],
+                            connected_images[i]
                         ]
                     ).detach()
                     for i in range(batch_size)
                 ]
             ),
-            nrow=10
+            nrow=12
         )
     )
     print(f"images: {images.shape}")

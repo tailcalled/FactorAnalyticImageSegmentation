@@ -68,17 +68,25 @@ def train_batch(images, model, optimizer, criterion, batch_size, save_info):
     images_a = resize(images_a)
     if save_info.i % save_info.save_freq == 0:
         reduced_images = []
+        connected_images = []
         for image in range(batch_size):
             reduced_loadings_image = rearrange(reduced_loadings[image], "loadings height width -> (height width) loadings")
+            # a bit hacky way to check the correlations but meh
+            connected_image = reduced_loadings_image[(reduced_loadings.shape[2] + 1) * reduced_loadings.shape[3] // 2]
+            connected_image = torch.sum(connected_image * reduced_loadings_image, axis=1)
+            connected_image = repeat(connected_image, "(height width) -> colors height width", colors=3, height=reduced_loadings.shape[2])
+            connected_images.append(connected_image)
             U, S, V = torch.pca_lowrank(reduced_loadings_image, 3)
             reduced_loadings_image = rearrange(U, "(height width) colors -> colors height width", height=output_loadings.shape[2], width=output_loadings.shape[3])
             reduced_images.append(reduced_loadings_image)
         reduced_loadings = torch.stack(reduced_images)
+        connected_images = torch.stack(connected_images)
         save_result(
             images_a,
             output_color[: images_a.shape[0]],
             resize(whitened_and_color_transformed_a),
             reduced_loadings,
+            connected_images,
             batch_size,
             output_dir=f"output/{save_info.dataset}/img_batches/",
             img_name=f"epoch{save_info.epoch}_batch{save_info.i}.png",
