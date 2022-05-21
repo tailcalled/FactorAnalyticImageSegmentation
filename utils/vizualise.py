@@ -102,6 +102,7 @@ def save_result(
     whitened_and_color_transformed,
     pca_result,
     connected_images,
+    colorized_images,
     batch_size,
     output_dir=None,
     img_name=None,
@@ -140,13 +141,14 @@ def save_result(
                             whitened_and_color_transformed[i],
                             output[i],
                             pca_result[i],
-                            connected_images[i]
+                            connected_images[i],
+                            colorized_images[i]
                         ]
                     ).detach()
                     for i in range(batch_size)
                 ]
             ),
-            nrow=12
+            nrow=14
         )
     )
     print(f"images: {images.shape}")

@@ -67,8 +67,12 @@ def train_batch(images, model, optimizer, criterion, batch_size, save_info):
     resize = transforms.Resize(56)
     images_a = resize(images_a)
     if save_info.i % save_info.save_freq == 0:
+        latents = torch.normal(0, 1, size=(reduced_loadings.shape[1]//3,))
+        colorized = rearrange(reduced_loadings, "batch (color loadings) height width -> batch color height width loadings", color=3)
+        colorized = torch.sum(colorized * latents, axis=4) + output_color[:images_a.shape[0]]
         reduced_images = []
         connected_images = []
+        colorized_images = []
         for image in range(batch_size):
             reduced_loadings_image = rearrange(reduced_loadings[image], "loadings height width -> (height width) loadings")
             # a bit hacky way to check the correlations but meh
@@ -85,14 +89,22 @@ def train_batch(images, model, optimizer, criterion, batch_size, save_info):
             U, S, V = torch.pca_lowrank(reduced_loadings_image, 3)
             reduced_loadings_image = rearrange(U, "(height width) colors -> colors height width", height=output_loadings.shape[2], width=output_loadings.shape[3])
             reduced_images.append(reduced_loadings_image)
+            # hacky
+            colorized_image = colorized[image]
+            lower = torch.clamp(torch.min(colorized_image), max=0)
+            upper = torch.clamp(torch.max(colorized_image), min=1)
+            colorized_image = (colorized_image - lower)/(upper-lower)
+            colorized_images.append(colorized_image)
         reduced_loadings = torch.stack(reduced_images)
         connected_images = torch.stack(connected_images)
+        colorized_images = torch.stack(colorized_images)
         save_result(
             images_a,
             output_color[: images_a.shape[0]],
             resize(whitened_and_color_transformed_a),
             reduced_loadings,
             connected_images,
+            colorized_images,
             batch_size,
             output_dir=f"output/{save_info.dataset}/img_batches/",
             img_name=f"epoch{save_info.epoch}_batch{save_info.i}.png",
