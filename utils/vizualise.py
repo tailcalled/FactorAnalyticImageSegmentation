@@ -118,6 +118,7 @@ def save_result(
     whitened_and_color_transformed = whitened_and_color_transformed.to(device)
     diff = diff.to(device)
     pca_result = pca_result.to(device)
+    colorized_images = colorized_images.to(device)
     print(
         (img + 0.5).shape, img.shape, whitened_and_color_transformed.shape, output.shape
     )
